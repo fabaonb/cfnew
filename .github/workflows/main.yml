@@ -1,0 +1,122 @@
+name: 自动同步上游
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/15 * * * *'
+  push:
+    branches:
+      - '*'
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    if: "!contains(github.event.head_commit.message, '同步上游')"
+    
+    steps:
+      - name: 检出当前仓库
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PAT }}
+      
+      - name: 配置 Git
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+      
+      - name: 检查上游更新
+        id: check
+        run: |
+          UPSTREAM_REPO="https://github.com/byJoey/cfnew.git"
+          UPSTREAM_COMMIT=$(git ls-remote $UPSTREAM_REPO HEAD | cut -f1)
+          
+          # 获取最后一次提交消息
+          LAST_MSG=$(git log -1 --pretty=%B)
+          
+          # 如果是定时触发，检查是否需要同步
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            # 检查今天是否已经同步过
+            TODAY=$(date -u +"%Y-%m-%d")
+            LAST_DATE=$(git log -1 --format='%cd' --date=short)
+            
+            if [ "$LAST_DATE" = "$TODAY" ] && echo "$LAST_MSG" | grep -q "同步上游"; then
+              echo "今天已同步，跳过"
+              echo "should_sync=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          fi
+          
+          echo "should_sync=true" >> $GITHUB_OUTPUT
+      
+      - name: 设置 Node.js
+        if: steps.check.outputs.should_sync == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: 安装混淆器
+        if: steps.check.outputs.should_sync == 'true'
+        run: npm install -g javascript-obfuscator
+      
+      - name: 保留必要文件
+        if: steps.check.outputs.should_sync == 'true'
+        run: |
+          mkdir -p /tmp/keep
+          cp -r .github /tmp/keep/
+          [ -f "README.md" ] && cp README.md /tmp/keep/
+      
+      - name: 清空并恢复
+        if: steps.check.outputs.should_sync == 'true'
+        run: |
+          find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+          cp -r /tmp/keep/.github .
+          [ -f "/tmp/keep/README.md" ] && cp /tmp/keep/README.md .
+      
+      - name: 拉取并混淆
+        if: steps.check.outputs.should_sync == 'true'
+        run: |
+          UPSTREAM_REPO="https://github.com/byJoey/cfnew.git"
+          git clone --depth 1 $UPSTREAM_REPO /tmp/upstream
+          
+          # 重命名为 .js 文件以便混淆器识别
+          cp "/tmp/upstream/明文源吗" "/tmp/source.js"
+          
+          javascript-obfuscator /tmp/source.js \
+            --output _worker.js \
+            --compact true \
+            --control-flow-flattening true \
+            --control-flow-flattening-threshold 0.5 \
+            --dead-code-injection true \
+            --dead-code-injection-threshold 0.3 \
+            --disable-console-output true \
+            --identifier-names-generator hexadecimal \
+            --log false \
+            --rename-globals false \
+            --simplify true \
+            --split-strings true \
+            --split-strings-chunk-length 10 \
+            --string-array true \
+            --string-array-calls-transform true \
+            --string-array-calls-transform-threshold 0.5 \
+            --string-array-encoding "base64" \
+            --string-array-index-shift true \
+            --string-array-rotate true \
+            --string-array-shuffle true \
+            --string-array-wrappers-count 2 \
+            --string-array-wrappers-chained-calls true \
+            --string-array-wrappers-parameters-max-count 3 \
+            --string-array-wrappers-type "function" \
+            --string-array-threshold 0.8 \
+            --transform-object-keys true \
+            --unicode-escape-sequence false
+      
+      - name: 提交并推送
+        if: steps.check.outputs.should_sync == 'true'
+        run: |
+          git add -A
+          git commit --amend -m "同步上游" || git commit -m "同步上游"
+          git push origin ${{ github.ref }} --force-with-lease
