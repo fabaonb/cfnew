@@ -82,7 +82,10 @@ jobs:
           UPSTREAM_REPO="https://github.com/byJoey/cfnew.git"
           git clone --depth 1 $UPSTREAM_REPO /tmp/upstream
           
-          javascript-obfuscator /tmp/upstream/明文源吗 \
+          # 重命名为 .js 文件以便混淆器识别
+          cp "/tmp/upstream/明文源吗" "/tmp/source.js"
+          
+          javascript-obfuscator /tmp/source.js \
             --output _worker.js \
             --compact true \
             --control-flow-flattening true \
